@@ -50,6 +50,13 @@ follow-up but not the primary driver.
 > UPI volume. A second, unrelated issue affects high-value transactions
 > (>₹10,000) across all payment methods.
 
+## Visual Summary
+
+![Payment Failure Analysis Charts](failure_analysis_charts.png)
+
+*Left: UPI's aggregate failure rate looks like a product problem. Middle: drilling into UPI by bank isolates the real cause — Kotak Bank's UPI integration. Right: a separate, unrelated issue on high-value transactions.*
+
+
 ## Recommendation
 1. Escalate the Kotak Bank UPI integration to the payments engineering
    team as a P1 — timeout-dominated failures at 44.8% suggest a specific
