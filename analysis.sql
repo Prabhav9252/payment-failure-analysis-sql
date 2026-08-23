@@ -1,98 +1,96 @@
+-- Overall Data View
+select * from transactions
+
 -- ============================================================
 -- Payment Failure Analysis
--- Question: Which payment methods fail most, and is the failure
+-- Business Problem to solve:-  Which payment methods fail most, and is the failure
 -- concentrated in a specific bank, device, or amount range?
 -- ============================================================
+-- Q1 :- calculate failure rate by payment method
 
--- STEP 1: Aggregate failure rate by payment method
--- (This is the number that would show up on a leadership dashboard
---  and trigger the investigation)
-SELECT
-    payment_method,
-    COUNT(*) AS total_txns,
-    SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failed_txns,
-    ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS failure_rate_pct
-FROM transactions
-GROUP BY payment_method
-ORDER BY failure_rate_pct DESC;
+select payment_method,count(*) as total_txns,
+sum(case when status='FAILED' then 1 else 0 end) as failed_txns,
+ROUND(sum(case when status='FAILED' then 1 else 0 end)*100.0/count(*),2) as failure_pct_rate
+from transactions
+group by payment_method
+order by failure_pct_rate desc
 
+-- Q2 :- now we go deeper into segment like for each bank we gonna calculate no of UPI transactions and their failure rate
+select bank,
+count(*) as upi_txns,
+sum(case when status='FAILED' then 1 else 0 end) as failed_txns,
+ROUND(sum(case when status='FAILED' then 1 else 0 end)*100.0/count(*),2) as failure_pct_rate
+from transactions
+where payment_method = 'UPI'
+group by bank
+order by failure_pct_rate desc
 
--- STEP 2: Drill into the worst offender (UPI) by bank
--- This is where "UPI is broken" either gets confirmed or falsified
-SELECT
-    bank,
-    COUNT(*) AS total_upi_txns,
-    SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failed_txns,
-    ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS failure_rate_pct
-FROM transactions
-WHERE payment_method = 'UPI'
-GROUP BY bank
-ORDER BY failure_rate_pct DESC;
-
-
--- STEP 3: Confirm the finding is UPI x Bank specific, not just that
+-- Q3:-  Confirm the finding is UPI x Bank specific, not just that
 -- bank being bad in general (rules out "Kotak Bank is just unreliable")
-SELECT
-    bank,
-    payment_method,
-    COUNT(*) AS total_txns,
-    ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS failure_rate_pct
-FROM transactions
-WHERE bank = 'Kotak Bank'
-GROUP BY payment_method
-ORDER BY failure_rate_pct DESC;
 
+select bank,
+payment_method,
+count(*) as total_txns,
+sum(case when status='FAILED' then 1 else 0 end) as failed_txns,
+ROUND(sum(case when status='FAILED' then 1 else 0 end)*100.0/count(*),2) as failure_pct_rate
+from transactions
+group by bank,payment_method
+order by failure_pct_rate desc
 
--- STEP 4: Check device type as a secondary factor
-SELECT
-    payment_method,
-    device_type,
-    COUNT(*) AS total_txns,
-    ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS failure_rate_pct
-FROM transactions
-GROUP BY payment_method, device_type
-ORDER BY payment_method, failure_rate_pct DESC;
+--Q4 now we check whether if it is a device specific problem or not
 
+select 
+payment_method,device_type,
+count(*) as total_txns,
+sum(case when status='FAILED' then 1 else 0 end) as failed_txns,
+ROUND(sum(case when status='FAILED' then 1 else 0 end)*100.0/count(*),2) as failure_pct_rate
+from transactions
+group by payment_method,device_type
+order by payment_method,failure_pct_rate desc
 
--- STEP 5: Bucket transactions by amount range and check failure concentration
-SELECT
-    CASE
-        WHEN amount < 500 THEN '1. Under 500'
+-- Q5 -- Now we bucket transactions by amount range and check failure concentration
+with cte as (
+select 
+	case
+		WHEN amount < 500 THEN '1. Under 500'
         WHEN amount < 2000 THEN '2. 500-2000'
         WHEN amount < 5000 THEN '3. 2000-5000'
         WHEN amount < 10000 THEN '4. 5000-10000'
         ELSE '5. Above 10000'
     END AS amount_bucket,
-    COUNT(*) AS total_txns,
-    SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failed_txns,
-    ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS failure_rate_pct
-FROM transactions
-GROUP BY amount_bucket
-ORDER BY amount_bucket;
+*
+from transactions)
+select amount_bucket,
+count(*) as total_txns,
+sum(case when status='FAILED' then 1 else 0 end) as failed_txns,
+ROUND(sum(case when status='FAILED' then 1 else 0 end)*100.0/count(*),2) as failure_pct_rate
+from cte
+group by amount_bucket
+order by amount_bucket
 
-
--- STEP 6: The real diagnostic - isolate UPI+Kotak Bank failures from
+-- Q6: The real diagnostic would be to isolate UPI+kotak bank failures from
 -- everything else, to size EXACTLY how much of the "UPI problem" is
 -- actually this one integration issue.
-SELECT
-    CASE
-        WHEN payment_method = 'UPI' AND bank = 'Kotak Bank' THEN 'UPI x Kotak Bank (suspected root cause)'
-        WHEN payment_method = 'UPI' THEN 'UPI x All other banks'
-        ELSE 'Non-UPI'
-    END AS segment,
-    COUNT(*) AS total_txns,
-    SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failed_txns,
-    ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS failure_rate_pct,
+with cte as (
+select case
+		when payment_method='UPI' and bank='Kotak Bank' then 'UPI+Kotak Bank'
+		when payment_method = 'UPI'then 'UPI + all other banks'
+		else 'Non UPI' end as segment,
+*
+from transactions
+)
+select segment
+,count(*) as total_txns,
+sum(case when status='FAILED' then 1 else 0 end) as failed_txns,
+ROUND(sum(case when status='FAILED' then 1 else 0 end)*100.0/count(*),2) as failure_pct_rate,
     -- what share of ALL UPI failures does this segment account for
     ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) /
         (SELECT SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) FROM transactions WHERE payment_method = 'UPI'), 2
     ) AS pct_of_total_upi_failures
-FROM transactions
+FROM cte
 WHERE payment_method = 'UPI'
 GROUP BY segment;
-
-
--- STEP 7: Top failure reasons within the isolated problem segment
+-- Q7: Top failure reasons within the isolated problem segment which is UPI + Kotak Bank Segment
 SELECT
     failure_reason,
     COUNT(*) AS occurrences,
